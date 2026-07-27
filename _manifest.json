@@ -1,9 +1,9 @@
 {
   "manifest_version": 2,
   "id": "github.kumburovicbranko682-boop.fanqie-novel-downloader",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "name": "番茄小说下载插件",
-  "description": "检测番茄/常读链接，无人回复一段时间后自动发送书籍卡片；支持本机签名网关下载 TXT。",
+  "description": "检测番茄/常读链接并延迟发卡片；本机引擎从 third_party 源码构建后下载 TXT。",
   "author": {
     "name": "kumburovicbranko682-boop",
     "url": "https://github.com/kumburovicbranko682-boop"

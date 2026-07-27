@@ -66,16 +66,22 @@ def ensure_local_signer(
     except Exception:
         pass
     if not exe.exists():
-        raise FileNotFoundError(f"缺少本机签名引擎: {exe}")
+        raise FileNotFoundError(f"缺少本机引擎: {exe}。请先按 BUILD_TOMATO.md 从 third_party 源码构建。")
     data_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = data_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_f = open(log_dir / "server.stdout.log", "ab", buffering=0)
+    stderr_f = open(log_dir / "server.stderr.log", "ab", buffering=0)
     env = os.environ.copy()
     env["TOMATO_WEB_ADDR"] = addr.replace("http://", "").replace("https://", "")
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         [str(exe), "--server", "--data-dir", str(data_dir), "--password", password],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout_f,
+        stderr=stderr_f,
     )
+    proc._tomato_log_handles = (stdout_f, stderr_f)  # type: ignore[attr-defined]
+    return proc
 
 
 def download_book(
@@ -103,7 +109,7 @@ def download_book(
             {
                 "save_path": str(output_dir),
                 "novel_format": "txt",
-                "use_official_api": True,
+                "use_official_api": False,
                 "api_endpoints": [],
                 "max_workers": max(1, int(workers)),
                 "ask_format_after_download": False,

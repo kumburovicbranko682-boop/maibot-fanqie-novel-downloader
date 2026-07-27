@@ -7,9 +7,32 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "1.2.0"
+CONFIG_VERSION = "1.3.0"
 PLUGIN_DIR = Path(__file__).resolve().parent
-DEFAULT_EXE = str(PLUGIN_DIR / "bin" / "TomatoNovelDownloader-Win64-v2.4.13.exe")
+
+
+def _default_tomato_exe() -> str:
+    """Prefer locally built artifact; fall back to legacy Release filename."""
+    import os
+
+    names = (
+        "tomato-novel-downloader.exe" if os.name == "nt" else "tomato-novel-downloader",
+        "tomato-novel-downloader",
+        "TomatoNovelDownloader-Win64-v2.4.13.exe",
+    )
+    candidates = []
+    for name in names:
+        candidates.append(PLUGIN_DIR / "bin" / name)
+    release = PLUGIN_DIR / "third_party" / "Tomato-Novel-Downloader" / "target" / "release"
+    for name in names:
+        candidates.append(release / name)
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    return str(PLUGIN_DIR / "bin" / names[0])
+
+
+DEFAULT_EXE = _default_tomato_exe()
 DEFAULT_OUTPUT = str(PLUGIN_DIR / "data" / "output")
 DEFAULT_TOMATO_DATA = str(PLUGIN_DIR / "data" / "tomato-data")
 
@@ -34,7 +57,7 @@ class DownloaderSection(PluginConfigBase):
 
     tomato_exe: str = Field(
         default=DEFAULT_EXE,
-        description="本机签名引擎可执行文件路径（Tomato Official-API 构建）。",
+        description="本机引擎路径（请先按 BUILD_TOMATO.md 从 third_party 源码构建）。",
     )
     tomato_data_dir: str = Field(
         default=DEFAULT_TOMATO_DATA,

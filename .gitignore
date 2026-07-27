@@ -15,3 +15,9 @@ data/jobs/*
 .DS_Store
 Thumbs.db
 _card_preview.jpg
+
+# Built Tomato engine
+bin/*
+!bin/.gitkeep
+third_party/Tomato-Novel-Downloader/target/
+third_party/Tomato-Novel-Downloader/Cargo.toml.official.bak
