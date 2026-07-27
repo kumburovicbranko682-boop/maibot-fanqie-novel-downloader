@@ -12,49 +12,71 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from maibot_sdk import Command, MaiBotPlugin
+    from maibot_sdk import Command, HookHandler, MaiBotPlugin
+    from maibot_sdk.components import HookMode
 except ImportError:
+    try:
+        from maibot_sdk import Command, MaiBotPlugin  # type: ignore
 
-    def Command(name: str, description: str = "", pattern: str = "", timeout_ms: int = 0):  # type: ignore[misc]
-        def _decorator(func):
-            func._command_info = {
-                "name": name,
-                "description": description,
-                "pattern": pattern,
-                "timeout_ms": timeout_ms,
-            }
-            return func
+        def HookHandler(*_a, **_k):  # type: ignore[misc]
+            def _decorator(func):
+                return func
 
-        return _decorator
+            return _decorator
 
-    class MaiBotPlugin:  # type: ignore[no-redef]
-        config_model = None
+        class HookMode:  # type: ignore[no-redef]
+            OBSERVE = "observe"
+    except ImportError:
 
-        def __init__(self) -> None:
-            self.ctx = None
-            if self.config_model is not None:
-                self.config = self.config_model()
+        def Command(name: str, description: str = "", pattern: str = "", timeout_ms: int = 0):  # type: ignore[misc]
+            def _decorator(func):
+                func._command_info = {
+                    "name": name,
+                    "description": description,
+                    "pattern": pattern,
+                    "timeout_ms": timeout_ms,
+                }
+                return func
 
-        def get_components(self) -> list[dict[str, Any]]:
-            components: list[dict[str, Any]] = []
-            for attr_name in dir(self):
-                attr = getattr(self, attr_name, None)
-                info = getattr(attr, "_command_info", None)
-                if not isinstance(info, dict):
-                    continue
-                components.append(
-                    {
-                        "name": info.get("name", attr_name),
-                        "type": "command",
-                        "metadata": {
-                            "command_pattern": info.get("pattern", ""),
-                            "description": info.get("description", ""),
-                            "handler_name": attr_name,
-                            "timeout_ms": info.get("timeout_ms", 0),
-                        },
-                    }
-                )
-            return components
+            return _decorator
+
+        def HookHandler(*_a, **_k):  # type: ignore[misc]
+            def _decorator(func):
+                return func
+
+            return _decorator
+
+        class HookMode:  # type: ignore[no-redef]
+            OBSERVE = "observe"
+
+        class MaiBotPlugin:  # type: ignore[no-redef]
+            config_model = None
+
+            def __init__(self) -> None:
+                self.ctx = None
+                if self.config_model is not None:
+                    self.config = self.config_model()
+
+            def get_components(self) -> list[dict[str, Any]]:
+                components: list[dict[str, Any]] = []
+                for attr_name in dir(self):
+                    attr = getattr(self, attr_name, None)
+                    info = getattr(attr, "_command_info", None)
+                    if not isinstance(info, dict):
+                        continue
+                    components.append(
+                        {
+                            "name": info.get("name", attr_name),
+                            "type": "command",
+                            "metadata": {
+                                "command_pattern": info.get("pattern", ""),
+                                "description": info.get("description", ""),
+                                "handler_name": attr_name,
+                                "timeout_ms": info.get("timeout_ms", 0),
+                            },
+                        }
+                    )
+                return components
 
 
 from .config import FanqieNovelDownloaderConfig
@@ -76,9 +98,27 @@ CMD_LIST = "\u5217\u8868"
 CMD_HISTORY = "\u5386\u53f2"
 CMD_INFO = "\u4fe1\u606f"
 
+
 COMMAND_PATTERN = (
     rf"^(?:#{XS}|#{FQ}|#fanqie|#novel)"
     r"(?:\s+(?P<args>[\s\S]*))?\s*$"
+)
+
+# Auto-detect: message is (mostly) a novel share link
+LINK_COMMAND_PATTERN = (
+    r"(?is)^\s*(?P<link>(?:https?://)?(?:[\w.-]+\.)?"
+    r"(?:fanqienovel\.com/page/\d{10,}|changdunovel\.com/t/[A-Za-z0-9_-]+/?)"
+    r"(?:\?[^\s]*)?)\s*$"
+)
+
+LINK_EXTRACT_RE = re.compile(
+    r"(?i)(?:https?://)?(?:[\w.-]+\.)?"
+    r"(?:fanqienovel\.com/page/\d{10,}|changdunovel\.com/t/[A-Za-z0-9_-]+/?)"
+    r"(?:\?[^\s]*)?"
+)
+
+COMMAND_PREFIX_RE = re.compile(
+    rf"(?i)^\s*(?:#{XS}|#{FQ}|#fanqie|#novel)\b"
 )
 
 
@@ -96,6 +136,8 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         self._jobs: dict[str, dict[str, Any]] = {}
         self._jobs_lock = asyncio.Lock()
         self._bg_tasks: set[asyncio.Task[Any]] = set()
+        self._link_cooldown: dict[str, float] = {}
+        self._pending_cards: dict[str, dict[str, Any]] = {}
 
     async def on_load(self) -> None:
         JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,6 +148,12 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
             self.ctx.logger.info(f"{FQ}{XS}\u4e0b\u8f7d\u63d2\u4ef6\u5df2\u52a0\u8f7d")
 
     async def on_unload(self) -> None:
+        for pending in list(self._pending_cards.values()):
+            pending["cancelled"] = True
+            task = pending.get("task")
+            if isinstance(task, asyncio.Task) and not task.done():
+                task.cancel()
+        self._pending_cards.clear()
         for task in list(self._bg_tasks):
             task.cancel()
         self._bg_tasks.clear()
@@ -201,6 +249,266 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
             False,
             f"\u672a\u77e5\u5b50\u547d\u4ee4\u3002\u53d1\u9001 #{XS} {CMD_HELP} \u67e5\u770b\u7528\u6cd5\u3002",
         )
+
+
+    @Command(
+        "fanqie_novel_link_detect",
+        description="Auto detect Fanqie/Changdu share link and send book card",
+        pattern=LINK_COMMAND_PATTERN,
+        timeout_ms=30000,
+    )
+    async def handle_link_command(
+        self,
+        stream_id: str = "",
+        matched_groups: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> tuple[bool, str, bool]:
+        if not getattr(self.config.plugin, "enabled", True):
+            return False, "", True
+        if not getattr(getattr(self.config, "auto_detect", None), "enabled", True):
+            return False, "", True
+        link = ""
+        if isinstance(matched_groups, dict):
+            link = str(matched_groups.get("link") or "").strip()
+        if not link:
+            raw = self._message_text(kwargs)
+            found = LINK_EXTRACT_RE.search(raw)
+            link = found.group(0) if found else raw.strip()
+        msg_id = ""
+        message = kwargs.get("message")
+        if isinstance(message, dict):
+            msg_id = self._message_id(message)
+        await self._schedule_delayed_card(
+            stream_id=stream_id,
+            target=link,
+            trigger_message_id=msg_id,
+        )
+        return True, "", True
+
+    @HookHandler(
+        "chat.receive.after_process",
+        mode=HookMode.OBSERVE,
+        description="Detect Fanqie/Changdu links; send card after silence delay",
+    )
+    async def on_message_auto_card(
+        self, hook_name: str, message: dict[str, Any], **kwargs: Any
+    ) -> None:
+        del hook_name, kwargs
+        if not getattr(self.config.plugin, "enabled", True):
+            return
+        if not getattr(getattr(self.config, "auto_detect", None), "enabled", True):
+            return
+        if not isinstance(message, dict):
+            return
+        stream_id = self._message_stream_id(message)
+        if not stream_id:
+            return
+
+        is_bot = self._message_is_bot(message)
+        text = self._message_plain_text(message)
+        msg_id = self._message_id(message)
+        links = LINK_EXTRACT_RE.findall(text) if text else []
+
+        # If waiting for silence and someone (non-bot) speaks without a new link -> cancel
+        pending = self._pending_cards.get(stream_id)
+        if pending and not is_bot:
+            same_trigger = bool(msg_id) and msg_id == str(pending.get("trigger_message_id") or "")
+            if not same_trigger and not links:
+                self._cancel_pending_card(stream_id, reason="replied")
+                return
+
+        if is_bot:
+            return
+        if not text or COMMAND_PREFIX_RE.match(text):
+            return
+        if not links:
+            return
+
+        await self._schedule_delayed_card(
+            stream_id=stream_id,
+            target=links[0],
+            trigger_message_id=msg_id,
+        )
+
+    def _cancel_pending_card(self, stream_id: str, reason: str = "") -> None:
+        pending = self._pending_cards.pop(stream_id, None)
+        if not pending:
+            return
+        pending["cancelled"] = True
+        pending["replied"] = reason == "replied"
+        task = pending.get("task")
+        if isinstance(task, asyncio.Task) and not task.done():
+            task.cancel()
+        if reason and getattr(self, "ctx", None) is not None and hasattr(self.ctx, "logger"):
+            self.ctx.logger.debug(f"cancel pending novel card stream={stream_id} reason={reason}")
+
+    async def _schedule_delayed_card(
+        self,
+        *,
+        stream_id: str,
+        target: str,
+        trigger_message_id: str = "",
+    ) -> None:
+        target = str(target or "").strip()
+        stream_id = str(stream_id or "").strip()
+        if not target or not stream_id:
+            return
+        try:
+            book_id = await asyncio.to_thread(resolve_book_id, target)
+        except Exception as exc:  # noqa: BLE001
+            self._log_warning(f"auto card resolve failed: {exc}")
+            return
+
+        # New link resets the silence timer for this stream
+        self._cancel_pending_card(stream_id, reason="reschedule")
+
+        delay = int(
+            getattr(getattr(self.config, "auto_detect", None), "delay_seconds", 30) or 0
+        )
+        pending: dict[str, Any] = {
+            "stream_id": stream_id,
+            "book_id": book_id,
+            "target": target,
+            "trigger_message_id": str(trigger_message_id or ""),
+            "cancelled": False,
+            "replied": False,
+            "created_at": time.time(),
+            "task": None,
+        }
+        self._pending_cards[stream_id] = pending
+
+        async def _delayed_job() -> None:
+            try:
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                return
+            cur = self._pending_cards.get(stream_id)
+            if cur is not pending:
+                return
+            if cur.get("cancelled") or cur.get("replied"):
+                self._pending_cards.pop(stream_id, None)
+                return
+            self._pending_cards.pop(stream_id, None)
+            await self._auto_send_card(stream_id, target, book_id=book_id)
+
+        if delay <= 0:
+            self._pending_cards.pop(stream_id, None)
+            await self._auto_send_card(stream_id, target, book_id=book_id)
+            return
+
+        task = asyncio.create_task(
+            _delayed_job(), name=f"fanqie-card-{stream_id[:16]}-{book_id[-6:]}"
+        )
+        pending["task"] = task
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _auto_send_card(
+        self,
+        stream_id: str,
+        target: str,
+        book_id: str | None = None,
+    ) -> tuple[bool, str, bool]:
+        target = str(target or "").strip()
+        if not target:
+            return False, "", True
+        if not book_id:
+            try:
+                book_id = await asyncio.to_thread(resolve_book_id, target)
+            except Exception as exc:  # noqa: BLE001
+                self._log_warning(f"auto card resolve failed: {exc}")
+                return False, "", True
+
+        cooldown = int(
+            getattr(getattr(self.config, "auto_detect", None), "cooldown_seconds", 120) or 0
+        )
+        key = f"{stream_id}:{book_id}"
+        now = time.time()
+        if cooldown > 0:
+            last = float(self._link_cooldown.get(key) or 0)
+            if now - last < cooldown:
+                return True, "", True
+            self._link_cooldown[key] = now
+            if len(self._link_cooldown) > 500:
+                cutoff = now - max(cooldown, 60)
+                self._link_cooldown = {
+                    k: v for k, v in self._link_cooldown.items() if v >= cutoff
+                }
+
+        try:
+            card = await asyncio.to_thread(build_book_card, book_id, target=target)
+        except Exception as exc:  # noqa: BLE001
+            self._log_warning(f"auto card build failed: {exc}")
+            return False, "", True
+        text = str(card.get("text") or "")
+        cover_b64 = card.get("cover_base64")
+        if text and cover_b64:
+            ok = await self._send_text_image(text, str(cover_b64), stream_id)
+            return bool(ok), text, True
+        if text:
+            await self._safe_send_text(stream_id, text)
+            return True, text, True
+        return False, "", True
+
+    @staticmethod
+    def _message_id(message: dict[str, Any]) -> str:
+        return str(
+            message.get("message_id")
+            or message.get("id")
+            or message.get("msg_id")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _message_plain_text(message: dict[str, Any]) -> str:
+        return str(
+            message.get("processed_plain_text")
+            or message.get("content")
+            or message.get("plain_text")
+            or message.get("raw_message")
+            or message.get("text")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _message_stream_id(message: dict[str, Any]) -> str:
+        return str(
+            message.get("session_id")
+            or message.get("stream_id")
+            or message.get("chat_id")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _message_is_bot(message: dict[str, Any]) -> bool:
+        if message.get("is_bot") is True or message.get("from_bot") is True:
+            return True
+        info = message.get("message_info") if isinstance(message.get("message_info"), dict) else {}
+        user = info.get("user_info") if isinstance(info.get("user_info"), dict) else {}
+        if user.get("is_bot") is True:
+            return True
+        user_id = str(user.get("user_id") or message.get("user_id") or "").strip()
+        self_ids = set()
+        for key in ("self_id", "bot_id", "bot_qq", "account_id"):
+            val = str(message.get(key) or info.get(key) or "").strip()
+            if val:
+                self_ids.add(val)
+        return bool(user_id and user_id in self_ids)
+
+    @staticmethod
+    def _message_text(kwargs: dict[str, Any]) -> str:
+        for key in ("text", "plain_text", "raw_message", "command"):
+            val = kwargs.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        message = kwargs.get("message")
+        if isinstance(message, dict):
+            for key in ("processed_plain_text", "plain_text", "raw_message", "text", "content"):
+                val = message.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        return ""
 
     async def _start_download(
         self,
@@ -581,6 +889,7 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
             f"#{XS} {CMD_STATUS} [\u4efb\u52a1ID]\n"
             f"#{XS} {CMD_LIST}\n\n"
             f"\u540c\u4e49\u524d\u7f00\uff1a#{FQ} / #fanqie / #novel\n\n"
+            "\u81ea\u52a8\u68c0\u6d4b\uff1a\u804a\u5929\u4e2d\u51fa\u73b0\u756a\u8304/\u5e38\u8bfb\u94fe\u63a5\u4f1a\u81ea\u52a8\u53d1\u9001\u4e66\u7c4d\u5361\u7247\n\n"
             "\u8bf4\u660e\uff1a\n"
             "- \u672c\u673a\u7b7e\u540d\u7f51\u5173\u76f4\u8fde\u5b98\u65b9 API\uff0c"
             "\u4e0d\u4f9d\u8d56\u7b2c\u4e09\u65b9 content \u955c\u50cf\n"

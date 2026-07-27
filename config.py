@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "1.0.0"
+CONFIG_VERSION = "1.2.0"
 PLUGIN_DIR = Path(__file__).resolve().parent
 DEFAULT_EXE = str(PLUGIN_DIR / "bin" / "TomatoNovelDownloader-Win64-v2.4.13.exe")
 DEFAULT_OUTPUT = str(PLUGIN_DIR / "data" / "output")
@@ -78,7 +78,33 @@ class SecuritySection(PluginConfigBase):
     )
 
 
+
+
+class AutoDetectSection(PluginConfigBase):
+    __ui_label__: ClassVar[str] = "\u81ea\u52a8\u68c0\u6d4b"
+    __ui_icon__: ClassVar[str] = "link"
+    __ui_order__: ClassVar[int] = 3
+
+    enabled: bool = Field(
+        default=True,
+        description="\u68c0\u6d4b\u5230\u756a\u8304/\u5e38\u8bfb\u94fe\u63a5\u65f6\u81ea\u52a8\u53d1\u9001\u4e66\u7c4d\u5361\u7247\uff08\u53ef\u914d\u7f6e\u5ef6\u8fdf\uff09\u3002",
+    )
+    delay_seconds: int = Field(
+        default=30,
+        ge=0,
+        le=3600,
+        description="\u68c0\u6d4b\u5230\u94fe\u63a5\u540e\uff0c\u7b49\u5f85\u591a\u5c11\u79d2\u65e0\u4eba\u56de\u590d\u518d\u53d1\u5361\u7247\uff1b0 \u8868\u793a\u7acb\u5373\u53d1\u9001\u3002",
+    )
+    cooldown_seconds: int = Field(
+        default=120,
+        ge=0,
+        le=86400,
+        description="\u540c\u4e00\u804a\u5929\u6d41\u5bf9\u540c\u4e00 book_id \u7684\u53d1\u9001\u51b7\u5374\uff08\u79d2\uff09\uff0c0 \u8868\u793a\u4e0d\u51b7\u5374\u3002",
+    )
+
+
 class FanqieNovelDownloaderConfig(PluginConfigBase):
     plugin: PluginSection = Field(default_factory=PluginSection)
     downloader: DownloaderSection = Field(default_factory=DownloaderSection)
     security: SecuritySection = Field(default_factory=SecuritySection)
+    auto_detect: AutoDetectSection = Field(default_factory=AutoDetectSection)
