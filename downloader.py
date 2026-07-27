@@ -1,0 +1,180 @@
+"""本机签名网关下载核心。"""
+
+from __future__ import annotations
+
+import http.cookiejar
+import json
+import os
+import subprocess
+import time
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+class LocalSignerGateway:
+    def __init__(self, base: str, password: str) -> None:
+        self.base = base.rstrip("/")
+        self.password = password
+        self.cj = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.cj)
+        )
+
+    def call(self, method: str, path: str, data: Any = None, timeout: int = 60) -> Any:
+        url = self.base + path
+        headers = {"User-Agent": "maibot-fanqie/1.0", "Accept": "application/json"}
+        body = None
+        if data is not None:
+            body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        with self.opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except Exception:
+                return raw.decode("utf-8", "replace")
+
+    def login(self) -> None:
+        data = self.call("POST", "/api/login", {"password": self.password})
+        if not (isinstance(data, dict) and data.get("ok")):
+            raise RuntimeError(f"本地网关登录失败: {data}")
+
+    def wait_ready(self, seconds: float = 45) -> None:
+        deadline = time.time() + seconds
+        last: Exception | None = None
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(self.base + "/", timeout=2).read(32)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                time.sleep(0.4)
+        raise RuntimeError(f"本地签名网关未就绪: {last}")
+
+
+def ensure_local_signer(
+    exe: Path, data_dir: Path, password: str, addr: str
+) -> subprocess.Popen | None:
+    try:
+        urllib.request.urlopen(addr + "/", timeout=2).read(32)
+        return None
+    except Exception:
+        pass
+    if not exe.exists():
+        raise FileNotFoundError(f"缺少本机签名引擎: {exe}")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["TOMATO_WEB_ADDR"] = addr.replace("http://", "").replace("https://", "")
+    return subprocess.Popen(
+        [str(exe), "--server", "--data-dir", str(data_dir), "--password", password],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def download_book(
+    book_id: str,
+    *,
+    exe: Path,
+    data_dir: Path,
+    output_dir: Path,
+    addr: str,
+    password: str,
+    workers: int = 6,
+    progress: ProgressCallback | None = None,
+    stop_server: bool = True,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    proc = ensure_local_signer(exe, data_dir, password, addr)
+    gw = LocalSignerGateway(addr, password)
+    try:
+        gw.wait_ready()
+        gw.login()
+        full = gw.call("GET", "/api/config/full")
+        if not isinstance(full, dict):
+            raise RuntimeError(f"读配置失败: {full}")
+        full.update(
+            {
+                "save_path": str(output_dir),
+                "novel_format": "txt",
+                "use_official_api": True,
+                "api_endpoints": [],
+                "max_workers": max(1, int(workers)),
+                "ask_format_after_download": False,
+                "min_wait_time": min(int(full.get("min_wait_time") or 1000), 300),
+                "max_wait_time": min(int(full.get("max_wait_time") or 1200), 800),
+            }
+        )
+        gw.call("POST", "/api/config/full", full)
+
+        before = {p.resolve() for p in output_dir.glob("*.txt")}
+        job = gw.call("POST", "/api/jobs", {"book_id": book_id})
+        if not isinstance(job, dict) or "id" not in job:
+            raise RuntimeError(f"创建任务失败: {job}")
+        job_id = job["id"]
+        if progress:
+            progress({"state": "queued", "job_id": job_id, "book_id": book_id})
+
+        while True:
+            data = gw.call("GET", "/api/jobs")
+            items = (data or {}).get("items") if isinstance(data, dict) else []
+            cur = next((x for x in items if x.get("id") == job_id), None)
+            if not cur:
+                raise RuntimeError("任务消失")
+            prog = cur.get("progress") or {}
+            if progress:
+                progress(
+                    {
+                        "state": cur.get("state"),
+                        "job_id": job_id,
+                        "book_id": book_id,
+                        "title": cur.get("title"),
+                        "saved": prog.get("saved_chapters"),
+                        "total": prog.get("chapter_total"),
+                    }
+                )
+            if cur.get("format_options"):
+                gw.call("POST", f"/api/jobs/{job_id}/format", {"format": "txt"})
+            if cur.get("book_name_options"):
+                opts = cur["book_name_options"]
+                gw.call(
+                    "POST",
+                    f"/api/jobs/{job_id}/book_name",
+                    {"book_name": opts[0]},
+                )
+            state = cur.get("state")
+            if state in ("done", "finished", "completed", "success"):
+                break
+            if state in ("failed", "error", "cancelled"):
+                raise RuntimeError(f"任务失败: {cur}")
+            time.sleep(3)
+
+        after = sorted(
+            output_dir.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        for path in after:
+            if path.resolve() not in before or len(after) == 1:
+                return path
+        cwd_txts = sorted(
+            Path.cwd().glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        if cwd_txts and (time.time() - cwd_txts[0].stat().st_mtime) < 600:
+            dest = output_dir / cwd_txts[0].name
+            dest.write_bytes(cwd_txts[0].read_bytes())
+            return dest
+        if after:
+            return after[0]
+        raise FileNotFoundError(f"未找到输出 txt: {output_dir}")
+    finally:
+        if proc and stop_server:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()

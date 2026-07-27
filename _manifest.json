@@ -1,0 +1,48 @@
+{
+  "manifest_version": 2,
+  "id": "github.kumburovicbranko682-boop.fanqie-novel-downloader",
+  "version": "1.0.0",
+  "name": "番茄小说下载插件",
+  "description": "通过本机签名网关下载番茄/常读小说为 TXT。支持 fanqienovel 链接、book_id、changdunovel 短链。",
+  "author": {
+    "name": "kumburovicbranko682-boop",
+    "url": "https://github.com/kumburovicbranko682-boop"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/kumburovicbranko682-boop/maibot-fanqie-novel-downloader",
+    "homepage": "https://github.com/kumburovicbranko682-boop/maibot-fanqie-novel-downloader",
+    "documentation": "https://github.com/kumburovicbranko682-boop/maibot-fanqie-novel-downloader#readme",
+    "issues": "https://github.com/kumburovicbranko682-boop/maibot-fanqie-novel-downloader/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "config.get",
+    "send.custom",
+    "send.hybrid",
+    "send.image",
+    "send.text"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "display": {
+    "icon": {
+      "type": "lucide",
+      "value": "book-open",
+      "fallback": "download",
+      "background": "#E11D48"
+    }
+  }
+}

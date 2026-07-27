@@ -1,0 +1,84 @@
+"""番茄小说下载插件配置。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import ClassVar
+
+from maibot_sdk import Field, PluginConfigBase
+
+CONFIG_VERSION = "1.0.0"
+PLUGIN_DIR = Path(__file__).resolve().parent
+DEFAULT_EXE = str(PLUGIN_DIR / "bin" / "TomatoNovelDownloader-Win64-v2.4.13.exe")
+DEFAULT_OUTPUT = str(PLUGIN_DIR / "data" / "output")
+DEFAULT_TOMATO_DATA = str(PLUGIN_DIR / "data" / "tomato-data")
+
+
+class PluginSection(PluginConfigBase):
+    __ui_label__: ClassVar[str] = "插件"
+    __ui_icon__: ClassVar[str] = "book-open"
+    __ui_order__: ClassVar[int] = 0
+
+    enabled: bool = Field(default=True, description="是否启用番茄小说下载插件。")
+    config_version: str = Field(
+        default=CONFIG_VERSION,
+        description="配置结构版本。",
+        json_schema_extra={"hidden": True, "disabled": True},
+    )
+
+
+class DownloaderSection(PluginConfigBase):
+    __ui_label__: ClassVar[str] = "下载器"
+    __ui_icon__: ClassVar[str] = "download"
+    __ui_order__: ClassVar[int] = 1
+
+    tomato_exe: str = Field(
+        default=DEFAULT_EXE,
+        description="本机签名引擎可执行文件路径（Tomato Official-API 构建）。",
+    )
+    tomato_data_dir: str = Field(
+        default=DEFAULT_TOMATO_DATA,
+        description="签名引擎数据目录。",
+    )
+    output_dir: str = Field(
+        default=DEFAULT_OUTPUT,
+        description="小说 TXT 输出目录。",
+    )
+    gateway_addr: str = Field(
+        default="http://127.0.0.1:18423",
+        description="本机签名网关地址。",
+    )
+    gateway_password: str = Field(
+        default="local123",
+        description="本机签名网关密码。",
+    )
+    max_workers: int = Field(default=6, ge=1, le=16, description="下载并发数。")
+    try_send_file: bool = Field(
+        default=True,
+        description="完成后尝试通过 send.custom 发送 TXT 文件（取决于适配器是否支持）。",
+    )
+
+
+class SecuritySection(PluginConfigBase):
+    __ui_label__: ClassVar[str] = "权限"
+    __ui_icon__: ClassVar[str] = "shield"
+    __ui_order__: ClassVar[int] = 2
+
+    allow_public: bool = Field(
+        default=True,
+        description="是否允许非管理员发起下载。",
+    )
+    administrators: list[str] = Field(
+        default_factory=list,
+        description="管理员列表，格式 user_id 或 platform:user_id。",
+    )
+    inherit_plugin_management_permissions: bool = Field(
+        default=True,
+        description="是否继承 MaiBot plugin.permission 管理员。",
+    )
+
+
+class FanqieNovelDownloaderConfig(PluginConfigBase):
+    plugin: PluginSection = Field(default_factory=PluginSection)
+    downloader: DownloaderSection = Field(default_factory=DownloaderSection)
+    security: SecuritySection = Field(default_factory=SecuritySection)

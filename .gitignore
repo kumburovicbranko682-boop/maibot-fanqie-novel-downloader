@@ -1,0 +1,17 @@
+﻿__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.log
+data/output/*
+!data/output/.gitkeep
+data/tomato-data/*
+!data/tomato-data/.gitkeep
+data/jobs/*
+!data/jobs/.gitkeep
+*.tmp
+.DS_Store
+Thumbs.db
+_card_preview.jpg
