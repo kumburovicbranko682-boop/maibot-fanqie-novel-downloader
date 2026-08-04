@@ -53,7 +53,7 @@ https://changdunovel.com/t/8ROF4ofKDwc/
 | 项 | 默认 | 说明 |
 |---|---|---|
 | `auto_detect.enabled` | `true` | 自动检测链接 |
-| `auto_detect.delay_seconds` | `30` | 链接发出后无人回复多久再发卡片（秒），0=立即发 |
+| `auto_detect.delay_seconds` | `0` | 链接发出后无人回复多久再发卡片（秒），0=立即发 |
 | `auto_detect.cooldown_seconds` | `120` | 同一聊天流对同一书的发送冷却 |
 | `downloader.auto_fetch_engine` | `true` | 引擎缺失时自动下载 |
 | `downloader.engine_version` | `v2.4.13` | 自动下载版本 |

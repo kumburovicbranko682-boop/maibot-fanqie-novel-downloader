@@ -129,7 +129,7 @@ class AutoDetectSection(PluginConfigBase):
         description="\u68c0\u6d4b\u5230\u756a\u8304/\u5e38\u8bfb\u94fe\u63a5\u65f6\u81ea\u52a8\u53d1\u9001\u4e66\u7c4d\u5361\u7247\uff08\u53ef\u914d\u7f6e\u5ef6\u8fdf\uff09\u3002",
     )
     delay_seconds: int = Field(
-        default=30,
+        default=0,
         ge=0,
         le=3600,
         description="\u68c0\u6d4b\u5230\u94fe\u63a5\u540e\uff0c\u7b49\u5f85\u591a\u5c11\u79d2\u65e0\u4eba\u56de\u590d\u518d\u53d1\u5361\u7247\uff1b0 \u8868\u793a\u7acb\u5373\u53d1\u9001\u3002",
