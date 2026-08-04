@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -15,27 +17,48 @@ UA = (
 )
 
 
-def _http_get(url: str, timeout: int = 20) -> bytes:
+def _http_get(url: str, timeout: int = 25) -> bytes:
     req = urllib.request.Request(
         url,
         headers={
             "User-Agent": UA,
             "Referer": "https://fanqienovel.com/",
-            "Accept": "*/*",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         },
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
+def _json_unescape(value: str) -> str:
+    try:
+        return json.loads('"' + value + '"')
+    except Exception:
+        return (
+            value.replace(r"\u002F", "/")
+            .replace(r"\/", "/")
+            .replace(r"\n", "\n")
+            .replace(r"\"", '"')
+        )
+
+
 def _json_str_field(html: str, key: str) -> str | None:
     m = re.search(rf'"{re.escape(key)}":"(.*?)"', html)
     if not m:
         return None
+    text = _json_unescape(m.group(1)).strip()
+    return text or None
+
+
+def _json_int_field(html: str, key: str) -> int | None:
+    m = re.search(rf'"{re.escape(key)}":\s*(\d+)', html)
+    if not m:
+        return None
     try:
-        return json.loads('"' + m.group(1) + '"')
+        return int(m.group(1))
     except Exception:
-        return m.group(1)
+        return None
 
 
 def _cover_from_thumb_uri(thumb_uri: str) -> str:
@@ -56,25 +79,194 @@ def _normalize_cover_url(url: str | None) -> str | None:
     return url
 
 
-def scrape_fanqie_page(book_id: str) -> dict[str, Any]:
-    html = _http_get(f"https://fanqienovel.com/page/{book_id}").decode("utf-8", "replace")
-    title = _json_str_field(html, "bookName")
-    author = _json_str_field(html, "authorName") or _json_str_field(html, "author")
+def _parse_initial_state(html: str) -> dict[str, Any] | None:
+    marker = "window.__INITIAL_STATE__="
+    idx = html.find(marker)
+    if idx < 0:
+        marker = "window.__INITIAL_STATE__ ="
+        idx = html.find(marker)
+        if idx < 0:
+            return None
+    start = idx + len(marker)
+    while start < len(html) and html[start].isspace():
+        start += 1
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(html, start)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _info_from_page_obj(page: dict[str, Any], book_id: str) -> dict[str, Any]:
+    bid = str(page.get("bookId") or page.get("book_id") or "")
+    if bid and bid != str(book_id):
+        return {}
+    title = str(page.get("bookName") or page.get("book_name") or "").strip()
+    author = str(page.get("authorName") or page.get("author") or "").strip()
     cover = _normalize_cover_url(
-        _json_str_field(html, "thumbUrl") or _json_str_field(html, "thumbUri")
+        str(page.get("thumbUrl") or page.get("thumbUri") or page.get("thumb_url") or "")
+        or None
     )
-    chapters = len(set(re.findall(r'"itemId":"(\d+)"', html)))
-    if not cover:
-        m = re.search(r'class="book-cover-img[^"]*"[^>]*src="([^"]+)"', html)
-        if m:
-            cover = _normalize_cover_url(m.group(1))
+    chapters = page.get("chapterTotal")
+    if chapters is None:
+        chapters = page.get("serialCount") or page.get("serial_count")
+    if chapters is None and isinstance(page.get("itemIds"), list):
+        chapters = len(page["itemIds"])
+    try:
+        chapters_i = int(chapters) if chapters not in (None, "") else None
+    except Exception:
+        chapters_i = None
+    if chapters_i is not None and chapters_i <= 0:
+        chapters_i = None
     return {
         "book_id": book_id,
-        "title": title or "",
-        "author": author or "",
-        "chapters": chapters or None,
+        "title": title,
+        "author": author,
+        "chapters": chapters_i,
         "cover_url": cover,
+        "source": "initial_state",
+    }
+
+
+def _info_from_fallbacks(html: str, book_id: str) -> dict[str, Any]:
+    title = ""
+    author = ""
+    cover = None
+
+    m = re.search(
+        r'<script[^>]+type="application/ld\+json"[^>]*>(\{.*?\})</script>',
+        html,
+        re.I | re.S,
+    )
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            headline = str(obj.get("headline") or "")
+            # "书名_书名小说_番茄小说官网" → 书名
+            title = headline.split("_")[0].strip() or title
+            authors = obj.get("author")
+            if isinstance(authors, list) and authors:
+                author = str(authors[0].get("name") or "").strip()
+            elif isinstance(authors, dict):
+                author = str(authors.get("name") or "").strip()
+        except Exception:
+            pass
+
+    if not title:
+        m = re.search(r"<title>(.*?)</title>", html, re.I | re.S)
+        if m:
+            raw = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            title = raw.split("_")[0].strip()
+
+    if not title:
+        m = re.search(
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+            html,
+            re.I,
+        )
+        if m:
+            title = m.group(1).split("_")[0].strip()
+
+    if not cover:
+        m = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            html,
+            re.I,
+        )
+        if m:
+            cover = _normalize_cover_url(m.group(1))
+
+    return {
+        "book_id": book_id,
+        "title": title,
+        "author": author,
+        "chapters": None,
+        "cover_url": cover,
+        "source": "html_fallback",
+    }
+
+
+def scrape_fanqie_page(book_id: str) -> dict[str, Any]:
+    html = _http_get(f"https://fanqienovel.com/page/{book_id}").decode("utf-8", "replace")
+    info: dict[str, Any] = {
+        "book_id": book_id,
+        "title": "",
+        "author": "",
+        "chapters": None,
+        "cover_url": None,
         "source": "fanqienovel_page",
+    }
+
+    state = _parse_initial_state(html)
+    if isinstance(state, dict):
+        page = state.get("page")
+        if isinstance(page, dict):
+            parsed = _info_from_page_obj(page, book_id)
+            for key, value in parsed.items():
+                if value:
+                    info[key] = value
+
+    if not info.get("title"):
+        title = _json_str_field(html, "bookName")
+        if title:
+            info["title"] = title
+    if not info.get("author"):
+        author = _json_str_field(html, "authorName") or _json_str_field(html, "author")
+        if author:
+            info["author"] = author
+    if not info.get("cover_url"):
+        cover = _normalize_cover_url(
+            _json_str_field(html, "thumbUrl") or _json_str_field(html, "thumbUri")
+        )
+        if cover:
+            info["cover_url"] = cover
+    if not info.get("chapters"):
+        chapters = _json_int_field(html, "chapterTotal") or _json_int_field(
+            html, "serialCount"
+        )
+        if not chapters:
+            n = len(set(re.findall(r'"itemId":"(\d+)"', html)))
+            chapters = n or None
+        if chapters:
+            info["chapters"] = chapters
+
+    if not info.get("cover_url"):
+        m = re.search(r'class="book-cover-img[^"]*"[^>]*src="([^"]+)"', html)
+        if m:
+            info["cover_url"] = _normalize_cover_url(m.group(1))
+
+    if not info.get("title") or not info.get("author"):
+        fb = _info_from_fallbacks(html, book_id)
+        for key in ("title", "author", "cover_url"):
+            if not info.get(key) and fb.get(key):
+                info[key] = fb[key]
+
+    return info
+
+
+def scrape_fanqie_page_retry(
+    book_id: str, *, attempts: int = 3, delay: float = 0.8
+) -> dict[str, Any]:
+    last_exc: Exception | None = None
+    for i in range(max(1, attempts)):
+        try:
+            info = scrape_fanqie_page(book_id)
+            if info.get("title"):
+                return info
+            last_exc = RuntimeError("empty title from fanqie page")
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+        if i + 1 < attempts:
+            time.sleep(delay * (i + 1))
+    if last_exc:
+        raise last_exc
+    return {
+        "book_id": book_id,
+        "title": "",
+        "author": "",
+        "chapters": None,
+        "cover_url": None,
+        "source": "empty",
     }
 
 
@@ -128,14 +320,14 @@ def enrich_via_tomato_search(gw: Any, book_id: str, title_hint: str = "") -> dic
 def download_cover_base64(cover_url: str, max_bytes: int = 2_500_000) -> str | None:
     data: bytes | None = None
     try:
-        data = _http_get(cover_url, timeout=25)
+        data = _http_get(cover_url, timeout=20)
     except Exception:
         data = None
     if not data or data[:3] != b"\xff\xd8\xff":
         m = re.search(r"(novel-pic/[a-zA-Z0-9]+)", cover_url or "")
         if m:
             try:
-                data = _http_get(_cover_from_thumb_uri(m.group(1)), timeout=25)
+                data = _http_get(_cover_from_thumb_uri(m.group(1)), timeout=20)
             except Exception:
                 data = None
     if not data or len(data) > max_bytes:
@@ -188,13 +380,14 @@ def build_book_card(
         "chapters": None,
         "cover_url": None,
     }
+    scrape_error: str | None = None
     try:
-        scraped = scrape_fanqie_page(book_id)
+        scraped = scrape_fanqie_page_retry(book_id, attempts=3)
         for key, value in scraped.items():
             if value:
                 info[key] = value
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        scrape_error = str(exc)
 
     if gateway is not None and (
         not info.get("cover_url") or not info.get("title") or not info.get("chapters")
@@ -211,7 +404,10 @@ def build_book_card(
 
     cover_b64 = None
     if info.get("cover_url"):
-        cover_b64 = download_cover_base64(str(info["cover_url"]))
+        try:
+            cover_b64 = download_cover_base64(str(info["cover_url"]))
+        except Exception:
+            cover_b64 = None
 
     chapters = info.get("chapters")
     text = format_book_card_text(
@@ -229,4 +425,6 @@ def build_book_card(
         "cover_url": info.get("cover_url"),
         "cover_base64": cover_b64,
         "text": text,
+        "ok": bool(info.get("title")),
+        "error": scrape_error,
     }

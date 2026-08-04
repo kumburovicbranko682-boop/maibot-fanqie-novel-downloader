@@ -471,6 +471,12 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         except Exception as exc:  # noqa: BLE001
             self._log_warning(f"auto card build failed: {exc}")
             return False, "", True
+        if not card.get("ok"):
+            err = card.get("error") or "empty metadata"
+            self._log_warning(
+                f"auto card skip unknown metadata book_id={book_id} err={err}"
+            )
+            return False, "", True
         text = str(card.get("text") or "")
         cover_b64 = card.get("cover_base64")
         if text and cover_b64:
@@ -695,6 +701,13 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
             card = await asyncio.to_thread(build_book_card, book_id, target=target)
         except Exception as exc:  # noqa: BLE001
             return await self._reply(stream_id, False, f"\u83b7\u53d6\u4e66\u7c4d\u4fe1\u606f\u5931\u8d25\uff1a{exc}")
+        if not card.get("ok"):
+            err = card.get("error") or "unknown"
+            return await self._reply(
+                stream_id,
+                False,
+                f"\u83b7\u53d6\u4e66\u7c4d\u4fe1\u606f\u5931\u8d25\uff08\u4e66\u540d\u4e3a\u7a7a\uff09\uff1a{err}",
+            )
         text = str(card.get("text") or "")
         cover_b64 = card.get("cover_base64")
         if text and cover_b64:
