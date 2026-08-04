@@ -1,14 +1,18 @@
-# 从源码构建本机签名引擎
+# 从源码构建本机引擎（可选）
 
-环境：Rust stable、网络（拉 crates.io 依赖）。
+普通用户**不需要**这一步：启用插件后会自动从上游 Releases 下载引擎。
 
-## 推荐：可审计 No-Official-API 构建
+本机构建适合：离线环境、需要 No-Official-API 定制编译、或不信任预构建产物时。
+
+需要：Rust stable、网络（拉 crates.io 依赖）。
+
+## 推荐：一键 No-Official-API 构建
 
 ```powershell
 # Windows
 pwsh -File scripts/build_tomato.ps1
 
-# 或跨平台
+# 多平台
 python scripts/build_tomato.py
 ```
 
@@ -26,14 +30,14 @@ cargo build --release --no-default-features --features no-official-api,tts,clipb
 # 产物: target/release/tomato-novel-downloader(.exe)
 ```
 
-说明：仓库内已附带完整 `Cargo.toml`（含 official-api 路径依赖）。公开环境请优先用上面的 `Cargo_no_official.toml` 流程，否则 `cargo build` 会因缺少 sibling Official-API 失败。
+说明：仓库内已附带上游 `Cargo.toml`。若 official-api 路径依赖缺失，请用上面的 `Cargo_no_official.toml` 流程，避免 `cargo build` 因缺少 sibling Official-API 失败。
 
 ## Official-API 构建（需私有 crate）
 
 ```text
 third_party/
   Tomato-Novel-Downloader/   # 本仓库已包含
-  Tomato-Novel-Official-API/ # 需自行取得，与上游 path 依赖一致
+  Tomato-Novel-Official-API/ # 需自行取得，并满足 path 依赖约定
 ```
 
 ```bash
@@ -41,8 +45,8 @@ cd third_party/Tomato-Novel-Downloader
 cargo build --release
 ```
 
-然后将 `target/release/tomato-novel-downloader(.exe)` 配置到 `downloader.tomato_exe`。
+然后将 `target/release/tomato-novel-downloader(.exe)` 配到 `downloader.tomato_exe`。
 
 ## 平台说明
 
-本插件逻辑跨平台；可执行引擎需在目标 OS 上自行从本仓库源码构建。仓库**不再内置**预编译 Windows exe。
+插件 Python 逻辑跨平台；可执行引擎需匹配目标 OS。仓库**故意不提交**预编译 Windows/Linux exe；默认走自动下载，源码构建为可选路径。

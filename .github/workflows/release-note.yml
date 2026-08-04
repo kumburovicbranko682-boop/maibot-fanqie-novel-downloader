@@ -1,0 +1,39 @@
+﻿name: Release engine checksums note
+
+# Optional CI: document that runtime auto-fetches upstream Tomato binaries.
+# Custom no-official-api builds can be added later as release assets.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write engine fetch note
+        run: |
+          cat > ENGINE_FETCH.md << 'EOF'
+          # Engine auto-fetch
+
+          This plugin does **not** ship prebuilt exe in git.
+
+          At runtime (`downloader.auto_fetch_engine=true`), it downloads the pinned
+          Tomato-Novel-Downloader release asset for the host platform from:
+
+          https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases
+
+          Pinned version: see `engine.py` / `downloader.engine_version` (default v2.4.13).
+
+          Offline / custom builds: `python scripts/build_tomato.py`
+          EOF
+      - name: Upload note on tag
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ENGINE_FETCH.md
+          generate_release_notes: true

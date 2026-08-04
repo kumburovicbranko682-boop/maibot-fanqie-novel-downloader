@@ -82,6 +82,7 @@ except ImportError:
 from .config import FanqieNovelDownloaderConfig
 from .downloader import download_book
 from .book_card import build_book_card
+from .engine import ensure_engine
 from .resolve_book import resolve_book_id
 
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -146,6 +147,9 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         self._load_jobs()
         if getattr(self, "ctx", None) is not None and hasattr(self.ctx, "logger"):
             self.ctx.logger.info(f"{FQ}{XS}\u4e0b\u8f7d\u63d2\u4ef6\u5df2\u52a0\u8f7d")
+        task = asyncio.create_task(self._warmup_engine())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     async def on_unload(self) -> None:
         for pending in list(self._pending_cards.values()):
@@ -168,6 +172,32 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
             self.ctx, "logger"
         ):
             self.ctx.logger.info(f"{FQ}{XS}\u4e0b\u8f7d\u63d2\u4ef6\u914d\u7f6e\u5df2\u66f4\u65b0")
+
+    async def _warmup_engine(self) -> None:
+        """Prefetch engine on load so first download is faster."""
+        cfg = getattr(getattr(self, "config", None), "downloader", None)
+        if cfg is None or not bool(getattr(cfg, "auto_fetch_engine", True)):
+            return
+
+        def _log(msg: str) -> None:
+            if getattr(self, "ctx", None) is not None and hasattr(self.ctx, "logger"):
+                self.ctx.logger.info(msg)
+
+        try:
+            path = await asyncio.to_thread(
+                ensure_engine,
+                exe=Path(cfg.tomato_exe),
+                auto_fetch=True,
+                download_url=str(getattr(cfg, "engine_download_url", "") or ""),
+                version=str(getattr(cfg, "engine_version", "v2.4.13") or "v2.4.13"),
+                expected_sha256=str(getattr(cfg, "engine_sha256", "") or ""),
+                log=_log,
+            )
+            # Keep config path usable even if default pointed to missing file.
+            if path.is_file():
+                cfg.tomato_exe = str(path)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"引擎预热跳过（首次下载时会重试）: {exc}")
 
     @Command(
         "fanqie_novel_download",
@@ -623,6 +653,10 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
                     workers=int(cfg.max_workers),
                     progress=on_progress,
                     stop_server=True,
+                    auto_fetch=bool(getattr(cfg, "auto_fetch_engine", True)),
+                    download_url=str(getattr(cfg, "engine_download_url", "") or ""),
+                    engine_version=str(getattr(cfg, "engine_version", "v2.4.13") or "v2.4.13"),
+                    engine_sha256=str(getattr(cfg, "engine_sha256", "") or ""),
                 ),
             )
             job["state"] = "done"

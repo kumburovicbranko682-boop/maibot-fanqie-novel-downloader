@@ -11,6 +11,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from .engine import ensure_engine
+
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -58,15 +60,30 @@ class LocalSignerGateway:
 
 
 def ensure_local_signer(
-    exe: Path, data_dir: Path, password: str, addr: str
+    exe: Path,
+    data_dir: Path,
+    password: str,
+    addr: str,
+    *,
+    auto_fetch: bool = True,
+    download_url: str = "",
+    engine_version: str = "v2.4.13",
+    engine_sha256: str = "",
 ) -> subprocess.Popen | None:
     try:
         urllib.request.urlopen(addr + "/", timeout=2).read(32)
         return None
     except Exception:
         pass
+    exe = ensure_engine(
+        exe=exe,
+        auto_fetch=auto_fetch,
+        download_url=download_url,
+        version=engine_version,
+        expected_sha256=engine_sha256,
+    )
     if not exe.exists():
-        raise FileNotFoundError(f"缺少本机引擎: {exe}。请先按 BUILD_TOMATO.md 从 third_party 源码构建。")
+        raise FileNotFoundError(f"缺少本机引擎: {exe}。")
     data_dir.mkdir(parents=True, exist_ok=True)
     log_dir = data_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -95,9 +112,22 @@ def download_book(
     workers: int = 6,
     progress: ProgressCallback | None = None,
     stop_server: bool = True,
+    auto_fetch: bool = True,
+    download_url: str = "",
+    engine_version: str = "v2.4.13",
+    engine_sha256: str = "",
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    proc = ensure_local_signer(exe, data_dir, password, addr)
+    proc = ensure_local_signer(
+        exe,
+        data_dir,
+        password,
+        addr,
+        auto_fetch=auto_fetch,
+        download_url=download_url,
+        engine_version=engine_version,
+        engine_sha256=engine_sha256,
+    )
     gw = LocalSignerGateway(addr, password)
     try:
         gw.wait_ready()

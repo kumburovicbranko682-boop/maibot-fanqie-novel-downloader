@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "1.3.0"
+CONFIG_VERSION = "1.4.0"
 PLUGIN_DIR = Path(__file__).resolve().parent
 
 
@@ -57,7 +57,23 @@ class DownloaderSection(PluginConfigBase):
 
     tomato_exe: str = Field(
         default=DEFAULT_EXE,
-        description="本机引擎路径（请先按 BUILD_TOMATO.md 从 third_party 源码构建）。",
+        description="本机引擎路径。默认 bin/tomato-novel-downloader；缺失时可自动从 GitHub Releases 拉取。",
+    )
+    auto_fetch_engine: bool = Field(
+        default=True,
+        description="引擎缺失时自动从 GitHub Releases 下载（仓库不内置 exe）。",
+    )
+    engine_version: str = Field(
+        default="v2.4.13",
+        description="自动下载使用的上游引擎版本标签。",
+    )
+    engine_download_url: str = Field(
+        default="",
+        description="可选：自定义引擎下载 URL（镜像）。留空则按平台自动拼接上游 Release 地址。",
+    )
+    engine_sha256: str = Field(
+        default="",
+        description="可选：下载后校验 SHA256；留空则跳过校验。",
     )
     tomato_data_dir: str = Field(
         default=DEFAULT_TOMATO_DATA,
