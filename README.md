@@ -2,7 +2,7 @@
 
 通过本机 Tomato 引擎（`--server` 网关）下载番茄/常读小说为 TXT。
 
-**自动检测：** 聊天中出现番茄/常读链接后，若配置时间内无人回复，则自动发送书籍卡片（书名/作者/章节/平台 + 封面）。
+**自动检测：** 聊天中出现番茄/常读链接后，自动发送书籍卡片并开始下载 TXT。
 
 ## 安装（一键）
 
@@ -53,6 +53,7 @@ https://changdunovel.com/t/8ROF4ofKDwc/
 | 项 | 默认 | 说明 |
 |---|---|---|
 | `auto_detect.enabled` | `true` | 自动检测链接 |
+| `auto_detect.auto_download` | `true` | 检测到链接后自动开始下载 |
 | `auto_detect.delay_seconds` | `0` | 链接发出后无人回复多久再发卡片（秒），0=立即发 |
 | `auto_detect.cooldown_seconds` | `120` | 同一聊天流对同一书的发送冷却 |
 | `downloader.auto_fetch_engine` | `true` | 引擎缺失时自动下载 |

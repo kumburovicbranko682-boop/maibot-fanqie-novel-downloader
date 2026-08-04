@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "1.4.1"
+CONFIG_VERSION = "1.4.2"
 PLUGIN_DIR = Path(__file__).resolve().parent
 
 
@@ -139,6 +139,10 @@ class AutoDetectSection(PluginConfigBase):
         ge=0,
         le=86400,
         description="\u540c\u4e00\u804a\u5929\u6d41\u5bf9\u540c\u4e00 book_id \u7684\u53d1\u9001\u51b7\u5374\uff08\u79d2\uff09\uff0c0 \u8868\u793a\u4e0d\u51b7\u5374\u3002",
+    )
+    auto_download: bool = Field(
+        default=True,
+        description="\u68c0\u6d4b\u5230\u94fe\u63a5\u540e\u662f\u5426\u81ea\u52a8\u5f00\u59cb\u4e0b\u8f7d\uff08\u4f1a\u5148\u53d1\u4e66\u7c4d\u5361\u7247\uff09\u3002",
     )
 
 

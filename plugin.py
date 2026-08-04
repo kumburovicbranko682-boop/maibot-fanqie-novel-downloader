@@ -283,13 +283,15 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
 
     @Command(
         "fanqie_novel_link_detect",
-        description="Auto detect Fanqie/Changdu share link and send book card",
+        description="Auto detect Fanqie/Changdu share link and send card / download",
         pattern=LINK_COMMAND_PATTERN,
         timeout_ms=30000,
     )
     async def handle_link_command(
         self,
         stream_id: str = "",
+        platform: str = "",
+        user_id: str = "",
         matched_groups: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> tuple[bool, str, bool]:
@@ -308,17 +310,23 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         message = kwargs.get("message")
         if isinstance(message, dict):
             msg_id = self._message_id(message)
+            if not platform or not user_id:
+                p2, u2 = self._message_platform_user(message)
+                platform = platform or p2
+                user_id = user_id or u2
         await self._schedule_delayed_card(
             stream_id=stream_id,
             target=link,
             trigger_message_id=msg_id,
+            platform=platform,
+            user_id=user_id,
         )
         return True, "", True
 
     @HookHandler(
         "chat.receive.after_process",
         mode=HookMode.OBSERVE,
-        description="Detect Fanqie/Changdu links; send card after silence delay",
+        description="Detect Fanqie/Changdu links; auto card/download after silence delay",
     )
     async def on_message_auto_card(
         self, hook_name: str, message: dict[str, Any], **kwargs: Any
@@ -354,10 +362,13 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         if not links:
             return
 
+        platform, user_id = self._message_platform_user(message)
         await self._schedule_delayed_card(
             stream_id=stream_id,
             target=links[0],
             trigger_message_id=msg_id,
+            platform=platform,
+            user_id=user_id,
         )
 
     def _cancel_pending_card(self, stream_id: str, reason: str = "") -> None:
@@ -378,6 +389,8 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         stream_id: str,
         target: str,
         trigger_message_id: str = "",
+        platform: str = "",
+        user_id: str = "",
     ) -> None:
         target = str(target or "").strip()
         stream_id = str(stream_id or "").strip()
@@ -393,12 +406,14 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         self._cancel_pending_card(stream_id, reason="reschedule")
 
         delay = int(
-            getattr(getattr(self.config, "auto_detect", None), "delay_seconds", 30) or 0
+            getattr(getattr(self.config, "auto_detect", None), "delay_seconds", 0) or 0
         )
         pending: dict[str, Any] = {
             "stream_id": stream_id,
             "book_id": book_id,
             "target": target,
+            "platform": str(platform or ""),
+            "user_id": str(user_id or ""),
             "trigger_message_id": str(trigger_message_id or ""),
             "cancelled": False,
             "replied": False,
@@ -420,11 +435,23 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
                 self._pending_cards.pop(stream_id, None)
                 return
             self._pending_cards.pop(stream_id, None)
-            await self._auto_send_card(stream_id, target, book_id=book_id)
+            await self._auto_handle_detected_link(
+                stream_id=stream_id,
+                target=target,
+                book_id=book_id,
+                platform=str(pending.get("platform") or ""),
+                user_id=str(pending.get("user_id") or ""),
+            )
 
         if delay <= 0:
             self._pending_cards.pop(stream_id, None)
-            await self._auto_send_card(stream_id, target, book_id=book_id)
+            await self._auto_handle_detected_link(
+                stream_id=stream_id,
+                target=target,
+                book_id=book_id,
+                platform=str(platform or ""),
+                user_id=str(user_id or ""),
+            )
             return
 
         task = asyncio.create_task(
@@ -434,11 +461,95 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
+    def _consume_link_cooldown(self, stream_id: str, book_id: str) -> bool:
+        """Return True if action should proceed; False if still in cooldown."""
+        cooldown = int(
+            getattr(getattr(self.config, "auto_detect", None), "cooldown_seconds", 120)
+            or 0
+        )
+        key = f"{stream_id}:{book_id}"
+        now = time.time()
+        if cooldown > 0:
+            last = float(self._link_cooldown.get(key) or 0)
+            if now - last < cooldown:
+                return False
+            self._link_cooldown[key] = now
+            if len(self._link_cooldown) > 500:
+                cutoff = now - max(cooldown, 60)
+                self._link_cooldown = {
+                    k: v for k, v in self._link_cooldown.items() if v >= cutoff
+                }
+        return True
+
+    async def _auto_handle_detected_link(
+        self,
+        *,
+        stream_id: str,
+        target: str,
+        book_id: str | None = None,
+        platform: str = "",
+        user_id: str = "",
+    ) -> tuple[bool, str, bool]:
+        target = str(target or "").strip()
+        if not target:
+            return False, "", True
+        if not book_id:
+            try:
+                book_id = await asyncio.to_thread(resolve_book_id, target)
+            except Exception as exc:  # noqa: BLE001
+                self._log_warning(f"auto link resolve failed: {exc}")
+                return False, "", True
+
+        if not self._consume_link_cooldown(stream_id, str(book_id)):
+            return True, "", True
+
+        auto_dl = bool(
+            getattr(getattr(self.config, "auto_detect", None), "auto_download", True)
+        )
+        if auto_dl:
+            allow = bool(getattr(getattr(self.config, "security", None), "allow_public", True))
+            if not allow:
+                admin = await self._is_administrator(platform, user_id)
+                if not admin:
+                    self._log_warning(
+                        f"auto download denied for non-admin user={user_id}"
+                    )
+                    return await self._auto_send_card(
+                        stream_id, target, book_id=book_id, apply_cooldown=False
+                    )
+            return await self._start_download(
+                stream_id=stream_id,
+                platform=platform,
+                user_id=user_id,
+                target=target,
+            )
+        return await self._auto_send_card(
+            stream_id, target, book_id=book_id, apply_cooldown=False
+        )
+
+    @staticmethod
+    def _message_platform_user(message: dict[str, Any]) -> tuple[str, str]:
+        info = message.get("message_info") if isinstance(message.get("message_info"), dict) else {}
+        user = info.get("user_info") if isinstance(info.get("user_info"), dict) else {}
+        platform = str(
+            message.get("platform")
+            or info.get("platform")
+            or ""
+        ).strip()
+        user_id = str(
+            user.get("user_id")
+            or message.get("user_id")
+            or ""
+        ).strip()
+        return platform, user_id
+
     async def _auto_send_card(
         self,
         stream_id: str,
         target: str,
         book_id: str | None = None,
+        *,
+        apply_cooldown: bool = True,
     ) -> tuple[bool, str, bool]:
         target = str(target or "").strip()
         if not target:
@@ -450,21 +561,8 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
                 self._log_warning(f"auto card resolve failed: {exc}")
                 return False, "", True
 
-        cooldown = int(
-            getattr(getattr(self.config, "auto_detect", None), "cooldown_seconds", 120) or 0
-        )
-        key = f"{stream_id}:{book_id}"
-        now = time.time()
-        if cooldown > 0:
-            last = float(self._link_cooldown.get(key) or 0)
-            if now - last < cooldown:
-                return True, "", True
-            self._link_cooldown[key] = now
-            if len(self._link_cooldown) > 500:
-                cutoff = now - max(cooldown, 60)
-                self._link_cooldown = {
-                    k: v for k, v in self._link_cooldown.items() if v >= cutoff
-                }
+        if apply_cooldown and not self._consume_link_cooldown(stream_id, str(book_id)):
+            return True, "", True
 
         try:
             card = await asyncio.to_thread(build_book_card, book_id, target=target)
@@ -936,7 +1034,7 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
             f"#{XS} {CMD_STATUS} [\u4efb\u52a1ID]\n"
             f"#{XS} {CMD_LIST}\n\n"
             f"\u540c\u4e49\u524d\u7f00\uff1a#{FQ} / #fanqie / #novel\n\n"
-            "\u81ea\u52a8\u68c0\u6d4b\uff1a\u804a\u5929\u4e2d\u51fa\u73b0\u756a\u8304/\u5e38\u8bfb\u94fe\u63a5\u4f1a\u81ea\u52a8\u53d1\u9001\u4e66\u7c4d\u5361\u7247\n\n"
+            "\u81ea\u52a8\u68c0\u6d4b\uff1a\u804a\u5929\u4e2d\u51fa\u73b0\u756a\u8304/\u5e38\u8bfb\u94fe\u63a5\u4f1a\u81ea\u52a8\u53d1\u5361\u7247\u5e76\u5f00\u59cb\u4e0b\u8f7d\n\n"
             "\u8bf4\u660e\uff1a\n"
             "- \u672c\u673a\u7b7e\u540d\u7f51\u5173\u76f4\u8fde\u5b98\u65b9 API\uff0c"
             "\u4e0d\u4f9d\u8d56\u7b2c\u4e09\u65b9 content \u955c\u50cf\n"
