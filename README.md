@@ -22,7 +22,8 @@
 | 系统 | 自动下载资产 |
 |---|---|
 | Windows x64 | `TomatoNovelDownloader-Win64-v2.4.13.exe` |
-| Linux amd64 | `TomatoNovelDownloader-Linux_amd64-v2.4.13` |
+| Linux amd64（glibc≥2.39） | `TomatoNovelDownloader-Linux_amd64-v2.4.13` |
+| Linux amd64（老系统 / musl） | `TomatoNovelDownloader-Linux_musl_amd64-v2.4.13`（默认自动选择） |
 | Linux arm64 / macOS | 同版本对应资产 |
 
 ## 用法
@@ -34,7 +35,7 @@ https://fanqienovel.com/page/7322690665316371518
 https://changdunovel.com/t/8ROF4ofKDwc/
 ```
 
-默认等待 **30 秒**无人回复后再发卡片；期间若有人说话则取消发送。
+默认立即发卡片并开始下载（`delay_seconds = 0`）。
 
 ### 手动指令
 

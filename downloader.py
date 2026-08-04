@@ -46,10 +46,14 @@ class LocalSignerGateway:
         if not (isinstance(data, dict) and data.get("ok")):
             raise RuntimeError(f"本地网关登录失败: {data}")
 
-    def wait_ready(self, seconds: float = 45) -> None:
+    def wait_ready(self, seconds: float = 45, proc: subprocess.Popen | None = None) -> None:
         deadline = time.time() + seconds
         last: Exception | None = None
         while time.time() < deadline:
+            if proc is not None and proc.poll() is not None:
+                raise RuntimeError(
+                    f"本机引擎进程已退出 code={proc.returncode}，网关未能启动"
+                )
             try:
                 urllib.request.urlopen(self.base + "/", timeout=2).read(32)
                 return
@@ -75,30 +79,80 @@ def ensure_local_signer(
         return None
     except Exception:
         pass
+
+    def _log(msg: str) -> None:
+        print(f"[fanqie-engine] {msg}", flush=True)
+
+    def _err_tail(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")[-1200:]
+        except Exception:
+            return ""
+
     exe = ensure_engine(
         exe=exe,
         auto_fetch=auto_fetch,
         download_url=download_url,
         version=engine_version,
         expected_sha256=engine_sha256,
+        log=_log,
     )
     if not exe.exists():
         raise FileNotFoundError(f"缺少本机引擎: {exe}。")
+
     data_dir.mkdir(parents=True, exist_ok=True)
     log_dir = data_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    stdout_f = open(log_dir / "server.stdout.log", "ab", buffering=0)
-    stderr_f = open(log_dir / "server.stderr.log", "ab", buffering=0)
+    stdout_path = log_dir / "server.stdout.log"
+    stderr_path = log_dir / "server.stderr.log"
+    stdout_f = open(stdout_path, "ab", buffering=0)
+    stderr_f = open(stderr_path, "ab", buffering=0)
     env = os.environ.copy()
     env["TOMATO_WEB_ADDR"] = addr.replace("http://", "").replace("https://", "")
-    proc = subprocess.Popen(
-        [str(exe), "--server", "--data-dir", str(data_dir), "--password", password],
-        env=env,
-        stdout=stdout_f,
-        stderr=stderr_f,
+
+    def _start(binary: Path) -> subprocess.Popen:
+        p = subprocess.Popen(
+            [str(binary), "--server", "--data-dir", str(data_dir), "--password", password],
+            env=env,
+            stdout=stdout_f,
+            stderr=stderr_f,
+        )
+        p._tomato_log_handles = (stdout_f, stderr_f)  # type: ignore[attr-defined]
+        return p
+
+    proc = _start(exe)
+    time.sleep(0.8)
+    if proc.poll() is None:
+        return proc
+
+    err_tail = _err_tail(stderr_path)
+    # Broken glibc-linked binary: force refetch (prefers musl on old hosts).
+    if auto_fetch and ("GLIBC_" in err_tail or "libc.so" in err_tail):
+        _log(f"引擎启动失败，强制重拉兼容构建: {err_tail.strip()[:240]}")
+        try:
+            exe.unlink(missing_ok=True)
+        except Exception:
+            pass
+        exe = ensure_engine(
+            exe=exe,
+            auto_fetch=True,
+            download_url="",
+            version=engine_version,
+            expected_sha256="",
+            log=_log,
+            force_refetch=True,
+        )
+        proc = _start(exe)
+        time.sleep(0.8)
+        if proc.poll() is None:
+            return proc
+        err_tail = _err_tail(stderr_path)
+
+    raise RuntimeError(
+        f"本机引擎无法启动（已退出 code={proc.returncode}）。"
+        f"详情: {err_tail.strip() or '无 stderr'}。"
+        " Linux 老系统需 musl 构建；可配置 downloader.engine_download_url。"
     )
-    proc._tomato_log_handles = (stdout_f, stderr_f)  # type: ignore[attr-defined]
-    return proc
 
 
 def download_book(
@@ -130,7 +184,7 @@ def download_book(
     )
     gw = LocalSignerGateway(addr, password)
     try:
-        gw.wait_ready()
+        gw.wait_ready(proc=proc)
         gw.login()
         full = gw.call("GET", "/api/config/full")
         if not isinstance(full, dict):
