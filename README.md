@@ -66,6 +66,12 @@ https://changdunovel.com/t/8ROF4ofKDwc/
 
 网关日志：`data/tomato-data/logs/server.stdout.log` / `server.stderr.log`。
 
+## 安全说明：引擎热更新
+
+Tomato 上游引擎启动时可能检查 GitHub Releases，并在**同版本号、不同 SHA256** 时自动替换本机可执行文件。
+
+本插件启动引擎时默认设置 `TOMATO_DISABLE_HOTFIX=1` 关闭该行为（vendored 源码已支持该开关）。用本仓库 `scripts/build_tomato.*` 构建的引擎最稳妥；仅使用上游 Release 预构建包时的兼容说明见 [BUILD_TOMATO.md](BUILD_TOMATO.md#热更新hotfix说明)。
+
 ## License
 
 MIT。第三方 Tomato-Novel-Downloader 亦为 MIT，见 `third_party/`。

@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-CONFIG_VERSION = "1.4.5"
+CONFIG_VERSION = "1.4.6"
 PLUGIN_DIR = Path(__file__).resolve().parent
 
 

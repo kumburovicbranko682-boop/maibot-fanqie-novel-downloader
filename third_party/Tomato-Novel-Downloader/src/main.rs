@@ -108,7 +108,7 @@ fn main() -> Result<()> {
     }
 
     // 启动时强制热更新（仅当 SHA256 不同且 tag 相同）。
-    // 例外：cargo run/开发态运行时跳过。
+    // 例外：cargo run/开发态、Docker feature、或 TOMATO_DISABLE_HOTFIX=1。
     let _ = base_system::self_update::check_hotfix_and_apply(VERSION);
 
     prewarm_state::mark_prewarm_start();

@@ -16,3 +16,7 @@
 本插件提供的**可复现公开构建**使用上游文档中的 **No-Official-API** 模式（`Cargo_no_official.toml` / `--features no-official-api`）：目录与书信息走网页解析，正文走第三方 API 地址池。详见 `BUILD_TOMATO.md`。
 
 若你自有 Official-API 源码，可按上游 README 放在 sibling 目录后执行默认 `cargo build --release`，再将产物路径填入插件配置 `downloader.tomato_exe`。
+
+### 本仓库相对上游的补丁
+
+- `src/base_system/self_update.rs`：支持环境变量 `TOMATO_DISABLE_HOTFIX=1`，跳过启动时同版本 SHA256 热替换（插件默认注入该变量）。详见 `BUILD_TOMATO.md`。

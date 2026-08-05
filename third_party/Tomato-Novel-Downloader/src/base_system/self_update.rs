@@ -69,11 +69,21 @@ where
 /// - 且本地可执行文件 SHA256 与期望不一致
 ///   才会强制下载并重启。
 ///
-/// 例外：当检测到是 `cargo run`（开发态）运行时，不执行强制热更新。
+/// 例外：`cargo run`/开发态、Docker feature、或 `TOMATO_DISABLE_HOTFIX=1` 时跳过。
 pub fn check_hotfix_and_apply(current_version: &str) -> Result<SelfUpdateOutcome> {
     catch_update_panic("check_hotfix_and_apply", || {
         check_hotfix_and_apply_impl(current_version)
     })
+}
+
+fn hotfix_disabled_by_env() -> bool {
+    match std::env::var("TOMATO_DISABLE_HOTFIX") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        }
+        Err(_) => false,
+    }
 }
 
 fn check_hotfix_and_apply_impl(current_version: &str) -> Result<SelfUpdateOutcome> {
@@ -81,6 +91,15 @@ fn check_hotfix_and_apply_impl(current_version: &str) -> Result<SelfUpdateOutcom
         warn!(
             target: "self_update",
             "Docker 构建已禁用热更新/自更新，请通过重新拉取镜像升级"
+        );
+        return Ok(SelfUpdateOutcome::Skipped);
+    }
+
+    // MaiBot 插件等嵌入场景：钉死本地构建，禁止同版本 SHA 热替换。
+    if hotfix_disabled_by_env() {
+        info!(
+            target: "self_update",
+            "TOMATO_DISABLE_HOTFIX 已启用，跳过强制热更新检查"
         );
         return Ok(SelfUpdateOutcome::Skipped);
     }

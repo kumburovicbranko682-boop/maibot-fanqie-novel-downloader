@@ -109,6 +109,11 @@ def ensure_local_signer(
     stderr_f = open(stderr_path, "ab", buffering=0)
     env = os.environ.copy()
     env["TOMATO_WEB_ADDR"] = addr.replace("http://", "").replace("https://", "")
+    # Pin the engine binary: skip Tomato's same-tag SHA256 hotfix replace.
+    # Honored by vendored third_party builds; also sets CARGO so stock upstream
+    # Release binaries (which treat CARGO as cargo-run) skip the same path.
+    env.setdefault("TOMATO_DISABLE_HOTFIX", "1")
+    env.setdefault("CARGO", "maibot-fanqie-plugin")
 
     def _start(binary: Path) -> subprocess.Popen:
         p = subprocess.Popen(
