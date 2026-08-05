@@ -770,14 +770,22 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
             self._persist_jobs()
             size_mb = path.stat().st_size / (1024 * 1024)
             done_text = (
-                f"\u4e0b\u8f7d\u5b8c\u6210 `{job_id}`\n"
-                f"\u300a{job['title']}\u300b\n"
-                f"\u6587\u4ef6\uff1a{path.name}\uff08{size_mb:.2f} MB\uff09\n"
-                f"\u8def\u5f84\uff1a{path}"
+                f"下载完成 `{job_id}`\n"
+                f"《{job['title']}》\n"
+                f"文件：{path.name}（{size_mb:.2f} MB）"
             )
             await self._safe_send_text(stream_id, done_text)
             if cfg.try_send_file:
-                await self._try_send_file(stream_id, path)
+                uploaded = await self._try_send_file(stream_id, path)
+                if uploaded:
+                    await self._safe_send_text(
+                        stream_id, f"已上传到群文件：{path.name}"
+                    )
+                else:
+                    await self._safe_send_text(
+                        stream_id,
+                        f"群文件上传失败，可联系管理员取文件。\n路径：{path}",
+                    )
         except Exception as exc:  # noqa: BLE001
             job["state"] = "failed"
             job["error"] = str(exc)
@@ -850,33 +858,60 @@ class FanqieNovelDownloaderPlugin(MaiBotPlugin):
                 pass
             return False
 
-    async def _try_send_file(self, stream_id: str, path: Path) -> None:
+    async def _try_send_file(self, stream_id: str, path: Path) -> bool:
+        """通过 send.custom(file) 触发适配器 upload_group_file / upload_private_file。"""
         if not stream_id or getattr(self, "ctx", None) is None:
-            return
+            return False
         send = getattr(self.ctx, "send", None)
         if send is None:
-            return
+            return False
         custom = getattr(send, "custom", None)
         if not callable(custom):
-            return
-        payloads = [
-            {"type": "file", "path": str(path), "name": path.name},
-            {"type": "file", "file": str(path), "name": path.name},
-            {"file": str(path), "name": path.name},
-        ]
-        for payload in payloads:
+            return False
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        if not resolved.is_file():
+            self._log_warning(f"send file skipped, missing: {resolved}")
+            return False
+        payload = {
+            "name": resolved.name,
+            "url": f"file://{resolved}",
+            "size": str(resolved.stat().st_size),
+        }
+        try:
+            # SDK: custom(custom_type, data, stream_id)
+            result = await custom("file", payload, stream_id)
+        except TypeError:
+            # 兼容极老签名
             try:
                 result = await custom(payload, stream_id)
-                if result is not False:
-                    return
             except Exception as exc:  # noqa: BLE001
                 self._log_warning(f"send.custom file failed: {exc}")
+                return False
+        except Exception as exc:  # noqa: BLE001
+            self._log_warning(f"send.custom file failed: {exc}")
+            return False
+
+        if result is False:
+            return False
+        if isinstance(result, dict) and result.get("success") is False:
+            self._log_warning(f"send.custom file rejected: {result}")
+            return False
+        return True
 
     async def _safe_send_text(self, stream_id: str, text: str) -> None:
         if not stream_id or getattr(self, "ctx", None) is None:
             return
         try:
-            await self.ctx.send.text(text, stream_id)
+            # 进度/结果通知尽量不入库，降低 LLM 把插件播报当群聊内容跟风复读的概率
+            await self.ctx.send.text(text, stream_id, storage_message=False)
+        except TypeError:
+            try:
+                await self.ctx.send.text(text, stream_id)
+            except Exception as exc:  # noqa: BLE001
+                self._log_warning(f"send text failed: {exc}")
         except Exception as exc:  # noqa: BLE001
             self._log_warning(f"send text failed: {exc}")
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "github.kumburovicbranko682-boop.fanqie-novel-downloader",
-  "version": "1.4.3",
+  "version": "1.4.5",
   "name": "番茄小说下载插件",
   "description": "检测到番茄/常读链接后自动发卡片并下载；Linux 老 glibc 自动选用 musl 引擎；首次运行自动拉取本机引擎。",
   "author": {
